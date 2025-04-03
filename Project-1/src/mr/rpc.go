@@ -11,21 +11,6 @@ import (
 	"strconv"
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
-// Add your RPC definitions here.
-
 type TaskRequest struct {
 }
 
@@ -45,7 +30,7 @@ type TaskResponse struct {
 	TaskID   int
 	Filename string // Only for map tasks
 	NReduce  int
-	NMap     int
+	NMap 	 int
 }
 
 // Sent from Worker to Coordinator after completing a task

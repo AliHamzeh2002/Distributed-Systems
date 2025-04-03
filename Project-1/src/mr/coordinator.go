@@ -10,20 +10,28 @@ import (
 	"time"
 )
 
+
 type TaskStatus struct {
 	isDone    bool
 	startTime time.Time
 }
 
-type Coordinator struct {
-	// Your definitions here.
+type Phase = int
 
+const (
+	MapPhase Phase = iota
+	ReducePhase
+	DonePhase
+)
+
+
+type Coordinator struct {
 	mu sync.Mutex
 
 	files    []string
 	nMap     int
 	nReduce  int
-	phase    string
+	phase    Phase
 
 	mapTasks    map[int]*TaskStatus
 	reduceTasks map[int]*TaskStatus
@@ -36,7 +44,7 @@ func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 	defer c.mu.Unlock()
 
 	switch c.phase {
-	case "map":
+	case MapPhase:
 		for id, task := range c.mapTasks {
 			if !task.isDone && time.Since(task.startTime) > 10*time.Second {
 				task.startTime = time.Now()
@@ -44,16 +52,15 @@ func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 				reply.TaskID = id
 				reply.Filename = c.files[id]
 				reply.NReduce = c.nReduce
+				reply.NMap = c.nMap
 				return nil
 			}
 		}
-		if c.allDone(c.mapTasks) {
-			c.phase = "reduce"
-		}
+		
 		reply.Type = Wait
 		return nil
 
-	case "reduce":
+	case ReducePhase:
 		for id, task := range c.reduceTasks {
 			if !task.isDone && time.Since(task.startTime) > 10*time.Second {
 				task.startTime = time.Now()
@@ -63,9 +70,7 @@ func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 				return nil
 			}
 		}
-		if c.allDone(c.reduceTasks) {
-			c.phase = "done"
-		}
+
 		reply.Type = Wait
 		return nil
 
@@ -79,14 +84,23 @@ func (c *Coordinator) ReportTaskDone(args *TaskReport, _ *struct{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.phase == "map" && args.TaskType == Map {
+	if c.phase == MapPhase && args.TaskType == Map {
 		if task, ok := c.mapTasks[args.TaskID]; ok {
 			task.isDone = true
 		}
+		if c.allDone(c.mapTasks) {
+			c.phase = ReducePhase
+		}
+		return nil;
 	}
-	if c.phase == "reduce" && args.TaskType == Reduce {
+
+	
+	if c.phase == ReducePhase && args.TaskType == Reduce {
 		if task, ok := c.reduceTasks[args.TaskID]; ok {
 			task.isDone = true
+		}
+		if c.allDone(c.reduceTasks) {
+			c.phase = DonePhase
 		}
 	}
 	return nil
@@ -114,12 +128,10 @@ func (c *Coordinator) server() {
 }
 
 func (c *Coordinator) Done() bool {
-	ret := false
 
-	// Your code here.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ret = c.phase == "done"
+	ret := (c.phase == DonePhase)
 
 	return ret
 }
@@ -127,11 +139,10 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
-	// Your code here.
 	c.files = files
 	c.nMap = len(files)
 	c.nReduce = nReduce
-	c.phase = "map"
+	c.phase = Map
 	c.mapTasks = make(map[int]*TaskStatus)
 	c.reduceTasks = make(map[int]*TaskStatus)
 

@@ -95,16 +95,17 @@ func processMap(task *TaskResponse, mapf func(string, string) []KeyValue) {
 
 	kva := mapf(task.Filename, string(content))
 	intermediateFiles := make([]*os.File, task.NReduce)
+	tempFiles := make([]string, task.NReduce)
 	encoders := make([]*json.Encoder, task.NReduce)
 
 	for i := 0; i < task.NReduce; i++ {
-		filename := fmt.Sprintf("mr-%d-%d", task.TaskID, i)
-		f, err := os.Create(filename)
+		tmpFile, err := os.CreateTemp(".", fmt.Sprintf("mr-%d-%d-", task.TaskID, i))
 		if err != nil {
-			log.Fatalf("cannot create file %v", filename)
+			log.Fatalf("cannot create temp file: %v", err)
 		}
-		intermediateFiles[i] = f
-		encoders[i] = json.NewEncoder(f)
+		intermediateFiles[i] = tmpFile
+		tempFiles[i] = tmpFile.Name()
+		encoders[i] = json.NewEncoder(tmpFile)
 	}
 
 	for _, kv := range kva {
@@ -115,8 +116,13 @@ func processMap(task *TaskResponse, mapf func(string, string) []KeyValue) {
 		}
 	}
 
-	for _, f := range intermediateFiles {
+	for i, f := range intermediateFiles {
 		f.Close()
+		finalName := fmt.Sprintf("mr-%d-%d", task.TaskID, i)
+		err := os.Rename(tempFiles[i], finalName)
+		if err != nil {
+			log.Fatalf("cannot rename temp file %v to %v: %v", tempFiles[i], finalName, err)
+		}
 	}
 }
 
@@ -141,12 +147,12 @@ func processReduce(task *TaskResponse, reducef func(string, []string) string) {
 	}
 
 	sort.Sort(ByKey(intermediate))
-	outfile := fmt.Sprintf("mr-out-%d", task.TaskID)
-	f, err := os.Create(outfile)
+
+	tempFile, err := os.CreateTemp(".", fmt.Sprintf("mr-out-%d-", task.TaskID))
 	if err != nil {
-		log.Fatalf("cannot create %v", outfile)
+		log.Fatalf("cannot create temporary file for %v", task.TaskID)
 	}
-	defer f.Close()
+	defer tempFile.Close()
 
 	i := 0
 	for i < len(intermediate) {
@@ -159,22 +165,17 @@ func processReduce(task *TaskResponse, reducef func(string, []string) string) {
 			values = append(values, intermediate[k].Value)
 		}
 		output := reducef(intermediate[i].Key, values)
-		fmt.Fprintf(f, "%v %v\n", intermediate[i].Key, output)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
 		i = j
+	}
+
+	finalName := fmt.Sprintf("mr-out-%d", task.TaskID)
+	err = os.Rename(tempFile.Name(), finalName)
+	if err != nil {
+		log.Fatalf("cannot rename temp file %v to %v: %v", tempFile.Name(), finalName, err)
 	}
 }
 
-// CallExample demonstrates an RPC call.
-func CallExample() {
-	args := ExampleArgs{X: 99}
-	reply := ExampleReply{}
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
 
 // Sends an RPC request.
 func call(rpcname string, args interface{}, reply interface{}) bool {
