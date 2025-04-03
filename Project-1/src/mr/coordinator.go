@@ -1,72 +1,106 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
-type Coordinator struct {
-	mu          sync.Mutex
-	mapCount    int // Counter to track how many map tasks have been assigned
-	reduceCount int // Counter to track how many reduce tasks have been assigned
-	nReduce     int // Total number of reduce tasks
-	nMap        int // Total number of map tasks (files)
-	files       []string
+type TaskStatus struct {
+	isDone    bool
+	startTime time.Time
 }
 
-// AssignTask provides tasks based on the request sequence.
-func (c *Coordinator) AssignTask(req *TaskRequest, res *TaskResponse) error {
+type Coordinator struct {
+	// Your definitions here.
+
+	mu sync.Mutex
+
+	files    []string
+	nMap     int
+	nReduce  int
+	phase    string
+
+	mapTasks    map[int]*TaskStatus
+	reduceTasks map[int]*TaskStatus
+}
+
+// Your code here -- RPC handlers for the worker to call.
+
+func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.mapCount < len(c.files) {
-		// Assign Map tasks for the first two requests
-		res.TaskID = c.mapCount
-		res.Type = Map
-		res.Filename = c.files[c.mapCount] // Assign file1.txt for task 0, file2.txt for task 1
-		res.NReduce = c.nReduce
-		res.NMap = c.nMap
-		c.mapCount++
+	switch c.phase {
+	case "map":
+		for id, task := range c.mapTasks {
+			if !task.isDone && time.Since(task.startTime) > 10*time.Second {
+				task.startTime = time.Now()
+				reply.Type = Map
+				reply.TaskID = id
+				reply.Filename = c.files[id]
+				reply.NReduce = c.nReduce
+				return nil
+			}
+		}
+		if c.allDone(c.mapTasks) {
+			c.phase = "reduce"
+		}
+		reply.Type = Wait
 		return nil
-	} else if c.reduceCount < c.nReduce {
-		// Assign Reduce tasks for the next 10 requests
-		res.TaskID = c.reduceCount
-		res.Type = Reduce
-		res.NReduce = c.nReduce
-		res.NMap = c.nMap
-		c.reduceCount++
+
+	case "reduce":
+		for id, task := range c.reduceTasks {
+			if !task.isDone && time.Since(task.startTime) > 10*time.Second {
+				task.startTime = time.Now()
+				reply.Type = Reduce
+				reply.TaskID = id
+				reply.NMap = c.nMap
+				return nil
+			}
+		}
+		if c.allDone(c.reduceTasks) {
+			c.phase = "done"
+		}
+		reply.Type = Wait
+		return nil
+
+	default:
+		reply.Type = Exit
 		return nil
 	}
+}
 
-	// No tasks available (i.e., completed all tasks)
-	fmt.Println("All tasks completed")
+func (c *Coordinator) ReportTaskDone(args *TaskReport, _ *struct{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.phase == "map" && args.TaskType == Map {
+		if task, ok := c.mapTasks[args.TaskID]; ok {
+			task.isDone = true
+		}
+	}
+	if c.phase == "reduce" && args.TaskType == Reduce {
+		if task, ok := c.reduceTasks[args.TaskID]; ok {
+			task.isDone = true
+		}
+	}
 	return nil
 }
 
-// Done checks if all tasks are completed.
-func (c *Coordinator) Done() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.mapCount >= 2 && c.reduceCount >= c.nReduce
-}
-
-// Create and initialize a Coordinator.
-func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{
-		nReduce: nReduce,
-		nMap:    len(files),
-		files:   files,
+func (c *Coordinator) allDone(tasks map[int]*TaskStatus) bool {
+	for _, t := range tasks {
+		if !t.isDone {
+			return false
+		}
 	}
-	c.server()
-	return &c
+	return true
 }
 
-// Start an RPC server to listen for worker requests.
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
@@ -77,4 +111,37 @@ func (c *Coordinator) server() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
+}
+
+func (c *Coordinator) Done() bool {
+	ret := false
+
+	// Your code here.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ret = c.phase == "done"
+
+	return ret
+}
+
+func MakeCoordinator(files []string, nReduce int) *Coordinator {
+	c := Coordinator{}
+
+	// Your code here.
+	c.files = files
+	c.nMap = len(files)
+	c.nReduce = nReduce
+	c.phase = "map"
+	c.mapTasks = make(map[int]*TaskStatus)
+	c.reduceTasks = make(map[int]*TaskStatus)
+
+	for i := range files {
+		c.mapTasks[i] = &TaskStatus{}
+	}
+	for i := 0; i < nReduce; i++ {
+		c.reduceTasks[i] = &TaskStatus{}
+	}
+
+	c.server()
+	return &c
 }

@@ -25,22 +25,33 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+
 type TaskRequest struct {
 }
 
+// Type of tasks returned to workers.
 type RequestType = int
 
 const (
 	Map RequestType = iota
 	Reduce
+	Wait
+	Exit
 )
 
+// Sent from Coordinator to Worker in response to TaskRequest
 type TaskResponse struct {
 	Type     RequestType
 	TaskID   int
-	Filename string
+	Filename string // Only for map tasks
 	NReduce  int
 	NMap     int
+}
+
+// Sent from Worker to Coordinator after completing a task
+type TaskReport struct {
+	TaskType RequestType
+	TaskID   int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
