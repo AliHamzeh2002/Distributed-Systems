@@ -24,7 +24,7 @@ type TaskResponse struct {
 	TaskID   int
 	Filename string // Only for map tasks
 	NReduce  int
-	NMap 	 int
+	NMap     int
 }
 
 // Sent from Worker to Coordinator after completing a task

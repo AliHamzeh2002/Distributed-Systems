@@ -40,13 +40,14 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		task, err := requestTask()
 		if err != nil {
 			log.Println("Error requesting task:", err)
+			time.Sleep(time.Second)
 			continue
 		}
 
 		switch task.Type {
 		case Map:
 			err := processMap(task, mapf)
-			if err != nil{
+			if err != nil {
 				log.Println("Error in Map Task:", err)
 				continue
 			}
@@ -54,7 +55,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 		case Reduce:
 			err := processReduce(task, reducef)
-			if err != nil{
+			if err != nil {
 				log.Println("Error in Reduce Task:", err)
 				continue
 			}
@@ -90,20 +91,20 @@ func reportDone(taskType int, taskID int) {
 }
 
 // Process a map task.
-func processMap(task *TaskResponse, mapf func(string, string) []KeyValue) error{
+func processMap(task *TaskResponse, mapf func(string, string) []KeyValue) error {
 	content, err := readFileContent(task.Filename)
-	if err != nil{
+	if err != nil {
 		return fmt.Errorf("error Reading File: %w", err)
 	}
 
 	kva := mapf(task.Filename, content)
 	intermediateFiles, err := writeToIntermediateFiles(kva, task.TaskID, task.NReduce)
-	if err != nil{
+	if err != nil {
 		return fmt.Errorf("error Writing to Intermediate Files: %w", err)
 	}
 
 	err = finalizeIntermediateFiles(intermediateFiles, task.TaskID)
-	if err != nil{
+	if err != nil {
 		return fmt.Errorf("error finalizing Intermediate Files: %w", err)
 	}
 
@@ -111,13 +112,13 @@ func processMap(task *TaskResponse, mapf func(string, string) []KeyValue) error{
 }
 
 // Read a file content for Map Task.
-func readFileContent(fileName string) (string, error){
+func readFileContent(fileName string) (string, error) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		return "", fmt.Errorf("cannot open %v: %w", fileName, err)
 	}
 	defer file.Close()
-	
+
 	content, err := io.ReadAll(file)
 	if err != nil {
 		return "", fmt.Errorf("cannot read %v: %w", fileName, err)
@@ -126,10 +127,10 @@ func readFileContent(fileName string) (string, error){
 }
 
 // Write map results to temporary intermediate files
-func writeToIntermediateFiles(kva []KeyValue, taskID int, nReduce int) ([]*os.File, error){
+func writeToIntermediateFiles(kva []KeyValue, taskID int, nReduce int) ([]*os.File, error) {
 	intermediateFiles := make([]*os.File, nReduce)
 	encoders := make([]*json.Encoder, nReduce)
-	
+
 	for i := 0; i < nReduce; i++ {
 		tmpFile, err := os.CreateTemp(".", fmt.Sprintf("mr-%d-%d-", taskID, i))
 		if err != nil {
@@ -151,7 +152,7 @@ func writeToIntermediateFiles(kva []KeyValue, taskID int, nReduce int) ([]*os.Fi
 }
 
 // Rename Temporary Intermediate files to their original names.
-func finalizeIntermediateFiles(intermediateFiles []*os.File, taskID int) error{
+func finalizeIntermediateFiles(intermediateFiles []*os.File, taskID int) error {
 	for i, f := range intermediateFiles {
 		f.Close()
 		finalName := fmt.Sprintf("mr-%d-%d", taskID, i)
@@ -164,9 +165,9 @@ func finalizeIntermediateFiles(intermediateFiles []*os.File, taskID int) error{
 }
 
 // Process a reduce task.
-func processReduce(task *TaskResponse, reducef func(string, []string) string) error{
+func processReduce(task *TaskResponse, reducef func(string, []string) string) error {
 	intermediate, err := readIntermediateValues(task.TaskID, task.NMap)
-	if (err != nil){
+	if err != nil {
 		return fmt.Errorf("error reading Intermediate values: %w", err)
 	}
 
@@ -198,12 +199,12 @@ func processReduce(task *TaskResponse, reducef func(string, []string) string) er
 	if err != nil {
 		return fmt.Errorf("cannot rename temp file %v to %v: %w", tempFile.Name(), finalName, err)
 	}
-	
+
 	return nil
 }
 
 // Read Key Values from Intermediate files
-func readIntermediateValues(taskID int, nMap int) ([]KeyValue, error){
+func readIntermediateValues(taskID int, nMap int) ([]KeyValue, error) {
 	intermediate := []KeyValue{}
 	for i := 0; i < nMap; i++ {
 		filename := fmt.Sprintf("mr-%d-%d", i, taskID)

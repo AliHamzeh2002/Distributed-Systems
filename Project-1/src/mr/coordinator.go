@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-
 type TaskStatus struct {
 	isDone    bool
 	startTime time.Time
@@ -24,20 +23,17 @@ const (
 	DonePhase
 )
 
-
 type Coordinator struct {
 	mu sync.Mutex
 
-	files    []string
-	nMap     int
-	nReduce  int
-	phase    Phase
+	files   []string
+	nMap    int
+	nReduce int
+	phase   Phase
 
 	mapTasks    map[int]*TaskStatus
 	reduceTasks map[int]*TaskStatus
 }
-
-// Your code here -- RPC handlers for the worker to call.
 
 func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 	c.mu.Lock()
@@ -56,7 +52,7 @@ func (c *Coordinator) AssignTask(_ *TaskRequest, reply *TaskResponse) error {
 				return nil
 			}
 		}
-		
+
 		reply.Type = Wait
 		return nil
 
@@ -91,10 +87,9 @@ func (c *Coordinator) ReportTaskDone(args *TaskReport, _ *struct{}) error {
 		if c.allDone(c.mapTasks) {
 			c.phase = ReducePhase
 		}
-		return nil;
+		return nil
 	}
 
-	
 	if c.phase == ReducePhase && args.TaskType == Reduce {
 		if task, ok := c.reduceTasks[args.TaskID]; ok {
 			task.isDone = true
