@@ -34,6 +34,9 @@ func MakeLock(ck kvtest.IKVClerk, l string) *Lock {
 func (lk *Lock) Acquire() {
 	for {
 		val, ver, err := lk.ck.Get(lk.name)
+		if val == lk.id {
+			return
+		}
 
 		if err == rpc.ErrNoKey {
 			if lk.ck.Put(lk.name, lk.id, 0) == rpc.OK {
