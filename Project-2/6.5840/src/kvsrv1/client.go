@@ -62,6 +62,24 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 	args := &rpc.PutArgs{Key: key, Value: value, Version: version}
 	reply := &rpc.PutReply{}
-	ck.clnt.Call(ck.server, "KVServer.Put", args, reply)
+
+	gotResponse := ck.clnt.Call(ck.server, "KVServer.Put", args, reply)
+
+	if !gotResponse {
+		ck.retransmit(args, reply)
+		if reply.Err == rpc.ErrVersion {
+			return rpc.ErrMaybe
+		}
+	}
+
 	return reply.Err
+}
+
+func (ck *Clerk) retransmit(args *rpc.PutArgs, reply *rpc.PutReply) rpc.Err {
+	for {
+		gotResponse := ck.clnt.Call(ck.server, "KVServer.Put", args, reply)
+		if gotResponse {
+			return reply.Err
+		}
+	}
 }
