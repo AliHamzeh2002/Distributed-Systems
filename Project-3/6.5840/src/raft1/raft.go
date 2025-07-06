@@ -384,11 +384,13 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 
 	if rf.state != Candidate {
 		// this server is no longer a candidate, so ignore the reply
+		rf.mu.Unlock()
 		return
 	}
 
 	if reply.VoteGranted {
 		if reply.Term < rf.currentTerm {
+			rf.mu.Unlock()
 			return
 		} else {
 			rf.voteCount++
