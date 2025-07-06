@@ -36,6 +36,8 @@ const NotVoted = -1
 const EmptyLogTerm = -1
 const EmptyLogIndex = -1
 
+const HeartBeatDelay = 120 // milliseconds
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -68,13 +70,10 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
 	// Your code here (3A).
-	term = rf.currentTerm
-	isleader = rf.state == Leader
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.state == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -170,6 +169,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	rf.updateTerm(args.Term)
 	reply.Term = rf.currentTerm
 
@@ -186,6 +188,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	reply.VoteGranted = true
+	rf.votedFor = args.CandidateId
 }
 
 type AppendEntriesArgs struct {
@@ -207,9 +210,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	rf.gotPulse = true
 	rf.updateTerm(args.Term)
-
 	reply.Term = rf.currentTerm
 }
 
@@ -293,15 +296,16 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) ticker() {
 	for !rf.killed() {
-
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		if (rf.state != Leader) && !rf.gotPulse {
+		rf.mu.Lock()
+		needElection := (rf.state != Leader) && !rf.gotPulse
+		rf.gotPulse = false
+		rf.mu.Unlock()
+
+		if needElection {
 			rf.startElection()
 		}
-
-		// TODO do we need locks here?
-		rf.gotPulse = false
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -312,10 +316,12 @@ func (rf *Raft) ticker() {
 
 func (rf *Raft) startElection() {
 	// TODO: I think we might persist the state here
+	rf.mu.Lock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.voteCount = 1
 	rf.state = Candidate
+	rf.mu.Unlock()
 
 	for i := range rf.peers {
 		if i == rf.me {
@@ -326,6 +332,7 @@ func (rf *Raft) startElection() {
 	}
 }
 
+// This method acquires the lock internally and is thread-safe.
 func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
 	var lastLogIndex int
 	var lastLogTerm int
@@ -349,8 +356,9 @@ func (rf *Raft) updateTerm(term int) {
 }
 
 func (rf *Raft) prepareAndSendRequestVote(server int) {
-	lastLogIndex, lastLogTerm := rf.getLastLogIndexAndTerm()
+	rf.mu.Lock()
 
+	lastLogIndex, lastLogTerm := rf.getLastLogIndexAndTerm()
 	args := &RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,
@@ -358,18 +366,19 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 		LastLogTerm:  lastLogTerm,
 	}
 
+	rf.mu.Unlock()
+
 	reply := &RequestVoteReply{}
 
 	if !rf.sendRequestVote(server, args, reply) {
 		return // RPC failed, don't do anything
 	}
 
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-
 	if rf.killed() {
 		return // this server has been killed
 	}
+
+	rf.mu.Lock()
 
 	rf.updateTerm(reply.Term)
 
@@ -386,10 +395,29 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 		}
 	}
 
-	if rf.voteCount > len(rf.peers)/2 {
+	becomesLeader := rf.state == Candidate && rf.voteCount > len(rf.peers)/2
+	if becomesLeader {
 		rf.state = Leader
+		rf.mu.Unlock()
+		go rf.heartbeatTicker()
+	} else {
+		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) heartbeatTicker() {
+	for !rf.killed() {
+		rf.mu.Lock()
+
+		if rf.state != Leader {
+			rf.mu.Unlock()
+			return
+		}
 		rf.sendHeartbeat()
-		return
+
+		rf.mu.Unlock()
+
+		time.Sleep(time.Duration(HeartBeatDelay) * time.Millisecond)
 	}
 }
 
