@@ -374,30 +374,21 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 	}
 
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	rf.updateTerm(reply.Term)
 
 	if rf.state != Candidate {
-		rf.mu.Unlock()
 		return
 	}
 
-	if reply.VoteGranted {
-		if reply.Term < rf.currentTerm {
-			rf.mu.Unlock()
-			return
-		} else {
-			rf.voteCount++
-		}
-	}
+	if reply.VoteGranted && reply.Term == rf.currentTerm {
+		rf.voteCount++
 
-	becomesLeader := rf.state == Candidate && rf.voteCount > len(rf.peers)/2
-	if becomesLeader {
-		rf.state = Leader
-		rf.mu.Unlock()
-		go rf.heartbeatTicker()
-	} else {
-		rf.mu.Unlock()
+		if rf.voteCount > len(rf.peers)/2 {
+			rf.state = Leader
+			go rf.heartbeatTicker()
+		}
 	}
 }
 
