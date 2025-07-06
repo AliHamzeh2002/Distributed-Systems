@@ -33,8 +33,6 @@ const (
 )
 
 const NotVoted = -1
-const EmptyLogTerm = -1
-const EmptyLogIndex = -1
 
 const HeartBeatDelay = 120 // milliseconds
 
@@ -266,8 +264,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := EmptyLogIndex
-	term := EmptyLogTerm
+	index := -1
+	term := -1
 	isLeader := true
 
 	// Your code here (3B).
@@ -334,15 +332,12 @@ func (rf *Raft) startElection() {
 
 // This method acquires the lock internally and is thread-safe.
 func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
-	var lastLogIndex int
-	var lastLogTerm int
-	if len(rf.log) == 0 {
-		lastLogIndex = EmptyLogIndex
-		lastLogTerm = EmptyLogTerm
-	} else {
-		lastLogIndex = len(rf.log) - 1
-		lastLogTerm = rf.log[lastLogIndex].Term
+	lastLogIndex := len(rf.log) - 1
+	if lastLogIndex < 0 {
+		panic("We should always have at least one log entry (the initial empty one)")
 	}
+
+	lastLogTerm := rf.log[lastLogIndex].Term
 
 	return lastLogIndex, lastLogTerm
 }
@@ -455,6 +450,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower // initial state
 	rf.gotPulse = true  // to avoid starting an election immediately
 	rf.currentTerm = 0
+	rf.log = make([]LogEntry, 1)
+	rf.log = append(rf.log, LogEntry{Term: 0, Command: nil}) // initial empty log entry
 
 	// Your initialization code here (3A, 3B, 3C).
 
