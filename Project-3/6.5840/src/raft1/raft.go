@@ -32,6 +32,10 @@ const (
 	Leader
 )
 
+const NotVoted = -1
+const EmptyLogTerm = -1
+const EmptyLogIndex = -1
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -68,6 +72,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (3A).
+	term = rf.currentTerm
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -167,7 +173,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.updateTerm(args.Term)
 	reply.Term = rf.currentTerm
 
-	if rf.votedFor != -1 || rf.votedFor == args.CandidateId {
+	if rf.votedFor != NotVoted || rf.votedFor == args.CandidateId {
 		reply.VoteGranted = false
 		return
 	}
@@ -257,8 +263,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
+	index := EmptyLogIndex
+	term := EmptyLogTerm
 	isLeader := true
 
 	// Your code here (3B).
@@ -324,8 +330,8 @@ func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
 	var lastLogIndex int
 	var lastLogTerm int
 	if len(rf.log) == 0 {
-		lastLogIndex = -1
-		lastLogTerm = 0
+		lastLogIndex = EmptyLogIndex
+		lastLogTerm = EmptyLogTerm
 	} else {
 		lastLogIndex = len(rf.log) - 1
 		lastLogTerm = rf.log[lastLogIndex].Term
@@ -337,7 +343,7 @@ func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
 func (rf *Raft) updateTerm(term int) {
 	if term > rf.currentTerm {
 		rf.currentTerm = term
-		rf.votedFor = -1 // reset votedFor
+		rf.votedFor = NotVoted // reset votedFor
 		rf.state = Follower
 	}
 }
@@ -417,6 +423,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.state = Follower // initial state
+	rf.gotPulse = true  // to avoid starting an election immediately
+	rf.currentTerm = 0
 
 	// Your initialization code here (3A, 3B, 3C).
 
