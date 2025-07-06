@@ -48,6 +48,8 @@ type Raft struct {
 	// Your data here (3A, 3B, 3C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+
+	// these are not in article, i dont know if should be persistent (i think not)
 	gotPulse  bool
 	state     State
 	voteCount int
