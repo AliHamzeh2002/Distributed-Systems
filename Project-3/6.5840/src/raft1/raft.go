@@ -35,6 +35,7 @@ const (
 const NotVoted = -1
 
 const HeartBeatDelay = 120 // milliseconds
+const InitialTerm = 0
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -323,14 +324,13 @@ func (rf *Raft) startElection() {
 
 	for i := range rf.peers {
 		if i == rf.me {
-			continue // don't send RPC to self
+			continue
 		}
 
 		go rf.prepareAndSendRequestVote(i)
 	}
 }
 
-// This method acquires the lock internally and is thread-safe.
 func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
 	lastLogIndex := len(rf.log) - 1
 	if lastLogIndex < 0 {
@@ -345,7 +345,7 @@ func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
 func (rf *Raft) updateTerm(term int) {
 	if term > rf.currentTerm {
 		rf.currentTerm = term
-		rf.votedFor = NotVoted // reset votedFor
+		rf.votedFor = NotVoted
 		rf.state = Follower
 	}
 }
@@ -370,7 +370,7 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 	}
 
 	if rf.killed() {
-		return // this server has been killed
+		return
 	}
 
 	rf.mu.Lock()
@@ -378,7 +378,6 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 	rf.updateTerm(reply.Term)
 
 	if rf.state != Candidate {
-		// this server is no longer a candidate, so ignore the reply
 		rf.mu.Unlock()
 		return
 	}
@@ -421,7 +420,7 @@ func (rf *Raft) heartbeatTicker() {
 func (rf *Raft) sendHeartbeat() {
 	for i := range rf.peers {
 		if i == rf.me {
-			continue // don't send RPC to self
+			continue
 		}
 
 		args := &AppendEntriesArgs{
@@ -449,9 +448,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.state = Follower // initial state
 	rf.gotPulse = true  // to avoid starting an election immediately
-	rf.currentTerm = 0
+	rf.currentTerm = InitialTerm
 	rf.log = make([]LogEntry, 1)
-	rf.log = append(rf.log, LogEntry{Term: 0, Command: nil}) // initial empty log entry
+	rf.log = append(rf.log, LogEntry{Term: InitialTerm, Command: nil}) // initial empty log entry
 
 	// Your initialization code here (3A, 3B, 3C).
 
