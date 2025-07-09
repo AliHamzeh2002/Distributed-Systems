@@ -194,14 +194,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 type AppendEntriesArgs struct {
 	Term int // leader’s term
+	LeaderId int
+	PrevLogIndex int
+	PrevLogTerm int
+	Entries []LogEntry
+	LeaderCommit int
 	// TODO: add more fields
 }
 
 type AppendEntriesReply struct {
 	Term int // currentTerm, for leader to update itself
-
-	// TODO: uncomment
-	// Success bool //true if follower contained entry matching prevLogIndex and prevLogTerm
+	Success bool //true if follower contained entry matching prevLogIndex and prevLogTerm
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -215,6 +218,47 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.gotPulse = true
 	rf.updateTerm(args.Term)
 	reply.Term = rf.currentTerm
+	reply.Success = true
+
+	// Reply false if term < currentTerm (§5.1)
+	if rf.currentTerm < args.Term {
+		reply.Success = false
+		return
+	}
+
+	//Reply false if log doesn’t contain an entry
+	// at prevLogIndex whose term matches prevLogTerm (§5.3)
+	if !rf.isLogMatching(args.PrevLogIndex, args.PrevLogTerm) {
+		reply.Success = false
+		return
+	}
+
+	// If an existing entry conflicts with a new one 
+	// (same index but different terms), delete the 
+	// existing entry and all that follow it (§5.3)
+	// Append any new entries not already in the log
+	for i := 0; i < len(args.Entries); i++{
+		entryIndex := args.PrevLogIndex + 1 + i
+		if entryIndex > len(rf.log) {
+			rf.log = append(rf.log, args.Entries[i])
+		} else if rf.log[entryIndex].Term != args.Term {
+			rf.log[entryIndex] = args.Entries[i]
+		}
+	}
+
+	//If leaderCommit > commitIndex, set commitIndex =
+	// min(leaderCommit, index of last new entry)
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+	}
+
+}
+
+func (rf *Raft) isLogMatching(index int, term int) bool {
+	if index < 0 || index >= len(rf.log) {
+		return false
+	}
+	return rf.log[index].Term == term
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -267,13 +311,21 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
-	// Your code here (3B).
+	term, isLeader := rf.GetState()
+	if !isLeader {
+		return -1, term, false
+	}
+	index := rf.addToLog(LogEntry{Command: command, Term: term})
 
 	return index, term, isLeader
+}
+
+func (rf *Raft) addToLog(entry LogEntry) int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.log = append(rf.log, entry)
+	return len(rf.log) - 1
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -388,10 +440,21 @@ func (rf *Raft) prepareAndSendRequestVote(server int) {
 		rf.voteCount++
 
 		if rf.voteCount > len(rf.peers)/2 {
-			rf.state = Leader
-			go rf.heartbeatTicker()
+			rf.becomeLeader()
 		}
 	}
+}
+
+func (rf *Raft) becomeLeader(){
+	rf.state = Leader
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	lastLogIndex, _ := rf.getLastLogIndexAndTerm()
+	for i := range rf.peers {
+		rf.nextIndex[i] = lastLogIndex + 1
+		rf.matchIndex[i] = 0
+	}
+	go rf.heartbeatTicker()
 }
 
 func (rf *Raft) heartbeatTicker() {
@@ -416,8 +479,22 @@ func (rf *Raft) sendHeartbeat() {
 			continue
 		}
 
+		prevLogIndex, prevLogTerm := rf.getLastLogIndexAndTerm()
+
+		//If last log index ≥ nextIndex for a follower: send
+		// AppendEntries RPC with log entries starting at nextIndex
+		sendEntries := []LogEntry{}
+		if rf.state == Leader {
+			sendEntries = rf.log[rf.nextIndex[i]:]
+		}
+
 		args := &AppendEntriesArgs{
 			Term: rf.currentTerm,
+			LeaderId: rf.me,
+			Entries:  sendEntries,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			LeaderCommit: rf.commitIndex,
 		}
 		reply := &AppendEntriesReply{}
 		go rf.sendAppendEntries(i, args, reply)
