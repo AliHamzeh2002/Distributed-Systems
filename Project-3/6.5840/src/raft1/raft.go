@@ -178,7 +178,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.updateTerm(args.Term)
 	reply.Term = rf.currentTerm
 
-	if rf.votedFor != NotVoted || rf.votedFor == args.CandidateId {
+	if rf.votedFor != NotVoted || rf.votedFor == args.CandidateId { //TODO : check
 		reply.VoteGranted = false
 		return
 	}
@@ -217,11 +217,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//log.Println(rf.me, rf.log, len(rf.log), args.Entries, args.PrevLogIndex, args.PrevLogTerm)
 
 	// Reply false if term < currentTerm (§5.1)
 	if rf.currentTerm > args.Term {
 		reply.Success = false
+		reply.Term = rf.currentTerm
 		return
 	}
 
@@ -419,7 +419,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 		go rf.sendAppendEntries(i, args)
 	}
-	//log.Println("server", rf.log, index, len(rf.log))
 	return index, term, isLeader
 }
 
@@ -574,18 +573,14 @@ func (rf *Raft) sendHeartbeat() {
 		if i == rf.me {
 			continue
 		}
-		// if rf.nextIndex[i] - 1 >= len(rf.log){
-		// 	log.Println(len(rf.log), rf.nextIndex[i] - 1)
-		// }
+
 		prevLogIndex, prevLogTerm := rf.nextIndex[i] - 1, rf.log[rf.nextIndex[i] - 1].Term
 
 		//If last log index ≥ nextIndex for a follower: send
 		// AppendEntries RPC with log entries starting at nextIndex
-		sendEntries := []LogEntry{}
-		if rf.state == Leader {
-			sendEntries = make([]LogEntry, len(rf.log[rf.nextIndex[i]:]))
-			copy(sendEntries, rf.log[rf.nextIndex[i]:])
-		}
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]:]))
+		copy(sendEntries, rf.log[rf.nextIndex[i]:])
+		
 
 		args := &AppendEntriesArgs{
 			Term: rf.currentTerm,
@@ -595,7 +590,6 @@ func (rf *Raft) sendHeartbeat() {
 			PrevLogTerm:  prevLogTerm,
 			LeaderCommit: rf.commitIndex,
 		}
-		//log.Println("server", rf.me, rf.log, len(rf.log), rf.currentTerm)
 		go rf.sendAppendEntries(i, args)
 	}
 }
