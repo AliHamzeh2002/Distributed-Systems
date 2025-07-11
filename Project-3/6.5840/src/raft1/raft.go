@@ -8,6 +8,7 @@ package raft
 
 import (
 	"bytes"
+	"log"
 
 	"math/rand"
 	"sync"
@@ -194,7 +195,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.updateTerm(args.Term)
 	reply.Term = rf.currentTerm
 
-	if rf.votedFor != NotVoted || rf.votedFor == args.CandidateId { //TODO : check
+	if rf.votedFor != NotVoted && rf.votedFor != args.CandidateId { //TODO : check
 		reply.VoteGranted = false
 		return
 	}
@@ -225,6 +226,9 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term int // currentTerm, for leader to update itself
 	Success bool //true if follower contained entry matching prevLogIndex and prevLogTerm
+	ConflictTerm int // term in the conflicting entry (if any)
+	ConflictIndex int // index of first entry with that term (if any)
+	XLen int // log length
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -234,6 +238,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 
 	// Reply false if term < currentTerm (§5.1)
@@ -251,10 +256,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	reply.Success = true
 
-	//Reply false if log doesn’t contain an entry
+	// Reply false if log doesn’t contain an entry
 	// at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if !rf.isLogMatching(args.PrevLogIndex, args.PrevLogTerm) {
 		reply.Success = false
+		reply.XLen = len(rf.log)
+		reply.ConflictIndex, reply.ConflictTerm = rf.findConflictData(args.PrevLogIndex)
 		return
 	}
 
@@ -266,7 +273,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		entryIndex := args.PrevLogIndex + 1 + i
 		if entryIndex >= len(rf.log) {
 			rf.log = append(rf.log, args.Entries[i])
-			rf.persist()
 
 		} else if rf.log[entryIndex].Term != args.Term {
 			rf.log[entryIndex] = args.Entries[i]
@@ -276,10 +282,24 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+		lastNewEntryIndex := args.PrevLogIndex + len(args.Entries)
+		rf.commitIndex = min(args.LeaderCommit, lastNewEntryIndex)
 		go rf.applyEntries()
 	}
 
+}
+
+func (rf *Raft) findConflictData(prevLogIndex int) (int, int){
+	if prevLogIndex >= len(rf.log){
+		return -1, -1
+	} 
+	conflictTerm := rf.log[prevLogIndex].Term
+	for i := 0; i < len(rf.log); i++{
+		if rf.log[i].Term == conflictTerm{
+			return i, conflictTerm
+		}
+	}
+	return -1, -1
 }
 
 func (rf *Raft) isLogMatching(index int, term int) bool {
@@ -351,6 +371,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 	//fmt.Println("entered", server, rf.me)
 	//defer fmt.Println("returned")
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	if reply.Term > rf.currentTerm{
 		rf.updateTerm(reply.Term)
@@ -374,15 +395,24 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 					count ++
 				}
 			}
-			if count <= len(rf.peers) / 2{
-				break
-			} 
-			rf.commitIndex = i
+			if count > len(rf.peers) / 2 && rf.log[i].Term == rf.currentTerm {
+				rf.commitIndex = i
+			}
 		}
 		go rf.applyEntries()
-	} else{
-		rf.nextIndex[server]--
-		rf.nextIndex[server] = max(rf.nextIndex[server], 1)
+	} else if args.Term >= reply.Term{
+		if reply.XLen <= args.PrevLogIndex{
+			rf.nextIndex[server] = reply.XLen
+		}else if rf.hasTerm(reply.ConflictTerm){
+			rf.nextIndex[server] = rf.findLastEntryIndex(reply.ConflictTerm) + 1 
+		}else{
+			rf.nextIndex[server] = reply.ConflictIndex
+		}
+		if rf.nextIndex[server] < 1{
+			log.Println(reply.XLen, reply.ConflictIndex, reply.ConflictTerm, args.Term, reply.Term, rf.currentTerm)
+		}
+		//rf.nextIndex[server] = args.PrevLogIndex
+		//rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 		prevLogIndex, prevLogTerm := rf.nextIndex[server] - 1, rf.log[rf.nextIndex[server] - 1].Term
 		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[server]:]))
 		copy(sendEntries, rf.log[rf.nextIndex[server]:])
@@ -396,6 +426,25 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 		} 
 		go rf.sendAppendEntries(server, newArgs)
 	}
+}
+
+func (rf *Raft) hasTerm(term int) bool{
+	for _, entry := range rf.log{
+		if entry.Term == term{
+			return true
+		}
+	}
+	return false
+}
+
+func (rf *Raft) findLastEntryIndex(term int) int{
+	lastEntryIndex := -1
+	for i, entry := range rf.log{
+		if entry.Term == term{
+			lastEntryIndex = i
+		}
+	}
+	return lastEntryIndex
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -413,13 +462,14 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	term, isLeader := rf.currentTerm, rf.state == Leader
 	if !isLeader {
 		return -1, -1, false
 	}
 	rf.log = append(rf.log, LogEntry{Command: command, Term: term})
-	rf.persist()
+	
 	index := len(rf.log) - 1
 
 	for i := range rf.peers {
@@ -522,7 +572,6 @@ func (rf *Raft) updateTerm(term int) {
 		rf.votedFor = NotVoted
 		rf.state = Follower
 		rf.persist()
-
 	}
 }
 
@@ -607,7 +656,6 @@ func (rf *Raft) sendHeartbeat() {
 		// AppendEntries RPC with log entries starting at nextIndex
 		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]:]))
 		copy(sendEntries, rf.log[rf.nextIndex[i]:])
-		
 
 		args := &AppendEntriesArgs{
 			Term: rf.currentTerm,
