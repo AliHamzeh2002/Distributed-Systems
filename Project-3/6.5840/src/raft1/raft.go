@@ -8,7 +8,6 @@ package raft
 
 import (
 	"bytes"
-	"log"
 
 	"math/rand"
 	"sync"
@@ -220,7 +219,6 @@ type AppendEntriesArgs struct {
 	PrevLogTerm int
 	Entries []LogEntry
 	LeaderCommit int
-	// TODO: add more fields
 }
 
 type AppendEntriesReply struct {
@@ -269,15 +267,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// (same index but different terms), delete the 
 	// existing entry and all that follow it (§5.3)
 	// Append any new entries not already in the log
-	for i := 0; i < len(args.Entries); i++{
-		entryIndex := args.PrevLogIndex + 1 + i
-		if entryIndex >= len(rf.log) {
-			rf.log = append(rf.log, args.Entries[i])
-
-		} else if rf.log[entryIndex].Term != args.Term {
-			rf.log[entryIndex] = args.Entries[i]
+	startIndex := args.PrevLogIndex + 1
+	i := 0
+	for ; i < len(args.Entries); i++ {
+		if startIndex+i >= len(rf.log) {
+			break
+		}
+		if rf.log[startIndex+i].Term != args.Entries[i].Term {
+			rf.log = rf.log[:startIndex+i]
+			break
 		}
 	}
+	rf.log = append(rf.log, args.Entries[i:]...)
 
 	//If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
@@ -408,11 +409,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 		}else{
 			rf.nextIndex[server] = reply.ConflictIndex
 		}
-		if rf.nextIndex[server] < 1{
-			log.Println(reply.XLen, reply.ConflictIndex, reply.ConflictTerm, args.Term, reply.Term, rf.currentTerm)
-		}
-		//rf.nextIndex[server] = args.PrevLogIndex
-		//rf.nextIndex[server] = max(rf.nextIndex[server], 1)
 		prevLogIndex, prevLogTerm := rf.nextIndex[server] - 1, rf.log[rf.nextIndex[server] - 1].Term
 		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[server]:]))
 		copy(sendEntries, rf.log[rf.nextIndex[server]:])
