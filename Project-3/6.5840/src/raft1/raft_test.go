@@ -10,6 +10,7 @@ package raft
 
 import (
 	"fmt"
+
 	// "log"
 	"math/rand"
 	"sync"
@@ -17,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 // The tester generously allows solutions to complete elections in one second
