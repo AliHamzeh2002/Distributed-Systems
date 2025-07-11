@@ -7,14 +7,14 @@ package raft
 // Make() creates a new raft peer that implements the raft interface.
 
 import (
-	//	"bytes"
+	"bytes"
 
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raftapi"
 	tester "6.5840/tester1"
@@ -87,19 +87,18 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (3C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	rf.persister.Save(w.Bytes(), nil)
 }
+
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 {
 		return
 	}
 	// Your code here (3C).
@@ -115,7 +114,24 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var term int
+	var vote int
+	var log []LogEntry
+
+	if d.Decode(&term) != nil ||
+		d.Decode(&vote) != nil ||
+		d.Decode(&log) != nil {
+		return // error reading persist data
+	}
+
+	rf.currentTerm = term
+	rf.votedFor = vote
+	rf.log = log
 }
+
 
 // how many bytes in Raft's persisted log?
 func (rf *Raft) PersistBytes() int {
@@ -192,6 +208,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.VoteGranted = true
 	rf.votedFor = args.CandidateId
+	rf.persist()
+
 }
 
 type AppendEntriesArgs struct {
@@ -248,6 +266,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		entryIndex := args.PrevLogIndex + 1 + i
 		if entryIndex >= len(rf.log) {
 			rf.log = append(rf.log, args.Entries[i])
+			rf.persist()
+
 		} else if rf.log[entryIndex].Term != args.Term {
 			rf.log[entryIndex] = args.Entries[i]
 		}
@@ -399,6 +419,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, -1, false
 	}
 	rf.log = append(rf.log, LogEntry{Command: command, Term: term})
+	rf.persist()
 	index := len(rf.log) - 1
 
 	for i := range rf.peers {
@@ -418,6 +439,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 
 		go rf.sendAppendEntries(i, args)
+		
+
 	}
 	return index, term, isLeader
 }
@@ -469,6 +492,8 @@ func (rf *Raft) startElection() {
 	rf.votedFor = rf.me
 	rf.voteCount = 1
 	rf.state = Candidate
+	rf.persist()
+
 	rf.mu.Unlock()
 
 	for i := range rf.peers {
@@ -496,6 +521,8 @@ func (rf *Raft) updateTerm(term int) {
 		rf.currentTerm = term
 		rf.votedFor = NotVoted
 		rf.state = Follower
+		rf.persist()
+
 	}
 }
 
