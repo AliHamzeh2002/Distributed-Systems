@@ -46,6 +46,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	applyCh   chan raftapi.ApplyMsg
+	applierCond *sync.Cond
 
 	// Your data here (3A, 3B, 3C).
 	// Look at the paper's Figure 2 for a description of what
@@ -285,7 +286,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderCommit > rf.commitIndex {
 		lastNewEntryIndex := args.PrevLogIndex + len(args.Entries)
 		rf.commitIndex = min(args.LeaderCommit, lastNewEntryIndex)
-		go rf.applyEntries()
+		rf.applierCond.Signal()
 	}
 
 }
@@ -310,22 +311,45 @@ func (rf *Raft) isLogMatching(index int, term int) bool {
 	return rf.log[index].Term == term
 }
 
-func (rf *Raft) applyEntries(){
-	rf.mu.Lock()
-	commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
-	entries := make([]LogEntry, commitIndex-lastApplied)
-	copy(entries, rf.log[lastApplied+1:commitIndex+1])
-	startIndex := lastApplied + 1
-	lastApplied = commitIndex
-	rf.mu.Unlock()
+// func (rf *Raft) applyEntries(){
+// 	rf.mu.Lock()
+// 	commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
+// 	entries := make([]LogEntry, commitIndex-lastApplied)
+// 	copy(entries, rf.log[lastApplied+1:commitIndex+1])
+// 	startIndex := lastApplied + 1
+// 	rf.lastApplied = commitIndex
+// 	rf.mu.Unlock()
 
-	for i, entry := range entries{
-		rf.applyCh <- raftapi.ApplyMsg{
-			CommandValid: true,
-			Command:      entry.Command,
-			CommandIndex: startIndex + i,
+// 	for i, entry := range entries{
+// 		rf.applyCh <- raftapi.ApplyMsg{
+// 			CommandValid: true,
+// 			Command:      entry.Command,
+// 			CommandIndex: startIndex + i,
+// 		}
+// 	}
+// }
+
+func (rf *Raft) applier(){
+	for !rf.killed(){
+		rf.mu.Lock()
+		rf.applierCond.Wait()
+		commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
+		entries := make([]LogEntry, commitIndex-lastApplied)
+		copy(entries, rf.log[lastApplied+1:commitIndex+1])
+		startIndex := lastApplied + 1
+		rf.lastApplied = commitIndex
+		rf.mu.Unlock()
+
+		for i, entry := range entries{
+			rf.applyCh <- raftapi.ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: startIndex + i,
+			}
 		}
+
 	}
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -400,7 +424,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 				rf.commitIndex = i
 			}
 		}
-		go rf.applyEntries()
+		rf.applierCond.Signal()
 	} else if args.Term >= reply.Term{
 		if reply.XLen <= args.PrevLogIndex{
 			rf.nextIndex[server] = reply.XLen
@@ -681,6 +705,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.applyCh = applyCh
+	rf.applierCond = sync.NewCond(&rf.mu)
 	rf.state = Follower // initial state
 	rf.gotPulse = true  // to avoid starting an election immediately
 	rf.currentTerm = InitialTerm
@@ -694,6 +719,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
+	go rf.applier()
 
 	return rf
 }

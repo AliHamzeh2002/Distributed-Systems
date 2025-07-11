@@ -2,7 +2,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def run_test():
-    result = subprocess.run(["go", "test", "-run", "3C"], capture_output=True, text=True)
+    result = subprocess.run(["go", "test", "-race", "-run", "3C"], capture_output=True, text=True)
     return result.stdout + result.stderr
 
 def main():
