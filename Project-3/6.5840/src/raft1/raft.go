@@ -480,7 +480,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 		}
 
 		if rf.nextIndex[server] <= rf.lastIncludedIndex {
-			
+
 			args := &InstallSnapshotArgs{
 				Term:              rf.currentTerm,
 				LeaderId:          rf.me,
@@ -492,16 +492,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 			go rf.sendInstallSnapshot(server, args)
 		}
 
-		arrayIndex := rf.nextIndex[server] - rf.lastIncludedIndex
-		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[arrayIndex-1].Term
-		var sendEntries []LogEntry
-		if arrayIndex == 0 {
-			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
-			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log entry
-		} else {
-			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:]))
-			copy(sendEntries, rf.log[arrayIndex:])
-		}
+		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex-1].Term
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:])
 
 		newArgs := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -564,20 +557,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		if i == rf.me {
 			continue
 		}
+
 		prevLogIndex := rf.nextIndex[i] - 1
+		prevLogTerm := rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
 
-		arrayIndex := rf.nextIndex[i] - rf.lastIncludedIndex
-
-		prevLogTerm := rf.log[arrayIndex-1].Term
-
-		var sendEntries []LogEntry
-		if arrayIndex == 0 {
-			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
-			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log entry
-		} else {
-			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:]))
-			copy(sendEntries, rf.log[arrayIndex:])
-		}
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -746,16 +731,8 @@ func (rf *Raft) sendHeartbeat() {
 		//If last log index ≥ nextIndex for a follower: send
 		// AppendEntries RPC with log entries starting at nextIndex
 
-		arrayIndex := rf.nextIndex[i] - rf.lastIncludedIndex
-		var sendEntries []LogEntry
-
-		if arrayIndex == 0 {
-			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
-			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log
-		} else {
-			sendEntries := make([]LogEntry, len(rf.log[arrayIndex:]))
-			copy(sendEntries, rf.log[arrayIndex:])
-		}
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
 
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
