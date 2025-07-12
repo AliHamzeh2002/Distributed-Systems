@@ -307,7 +307,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if !rf.isLogMatching(args.PrevLogIndex, args.PrevLogTerm) {
 		reply.Success = false
-		reply.XLen = len(rf.log) // Amirali:TODO we should change this
+		reply.XLen = len(rf.log) + rf.lastIncludedIndex // Amirali:TODO we should change this
 		reply.ConflictIndex, reply.ConflictTerm = rf.findConflictData(args.PrevLogIndex)
 		return
 	}
