@@ -149,7 +149,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastApplied = lastIncludedIndex
 }
 
-func (rf *Raft) applySnapshot(snapshot []byte) {
+func (rf *Raft) applySnapshot() {
 	rf.applyCh <- raftapi.ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      rf.snapshot,
@@ -478,9 +478,31 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 		} else {
 			rf.nextIndex[server] = reply.ConflictIndex
 		}
-		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex-1].Term
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:]))
-		copy(sendEntries, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:])
+
+		if rf.nextIndex[server] <= rf.lastIncludedIndex {
+			
+			args := &InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.lastIncludedIndex,
+				LastIncludedTerm:  rf.lastIncludedTerm,
+				Snapshot:          rf.snapshot,
+			}
+
+			go rf.sendInstallSnapshot(server, args)
+		}
+
+		arrayIndex := rf.nextIndex[server] - rf.lastIncludedIndex
+		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[arrayIndex-1].Term
+		var sendEntries []LogEntry
+		if arrayIndex == 0 {
+			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
+			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log entry
+		} else {
+			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:]))
+			copy(sendEntries, rf.log[arrayIndex:])
+		}
+
 		newArgs := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -543,9 +565,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			continue
 		}
 		prevLogIndex := rf.nextIndex[i] - 1
-		prevLogTerm := rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
-		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
+
+		arrayIndex := rf.nextIndex[i] - rf.lastIncludedIndex
+
+		prevLogTerm := rf.log[arrayIndex-1].Term
+
+		var sendEntries []LogEntry
+		if arrayIndex == 0 {
+			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
+			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log entry
+		} else {
+			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:]))
+			copy(sendEntries, rf.log[arrayIndex:])
+		}
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -713,8 +745,17 @@ func (rf *Raft) sendHeartbeat() {
 
 		//If last log index ≥ nextIndex for a follower: send
 		// AppendEntries RPC with log entries starting at nextIndex
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
-		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
+
+		arrayIndex := rf.nextIndex[i] - rf.lastIncludedIndex
+		var sendEntries []LogEntry
+
+		if arrayIndex == 0 {
+			sendEntries = make([]LogEntry, len(rf.log[arrayIndex:])-1)
+			copy(sendEntries, rf.log[arrayIndex+1:]) // skip the initial empty log
+		} else {
+			sendEntries := make([]LogEntry, len(rf.log[arrayIndex:]))
+			copy(sendEntries, rf.log[arrayIndex:])
+		}
 
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -762,7 +803,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	if len(snapshot) != 0 {
 		rf.snapshot = make([]byte, len(snapshot))
 		copy(rf.snapshot, snapshot)
-		go rf.applySnapshot(snapshot)
+		go rf.applySnapshot()
 	}
 
 	// start ticker goroutine to start elections
@@ -771,4 +812,66 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.applier()
 
 	return rf
+}
+
+type InstallSnapshotArgs struct {
+	Term              int    // leader's term
+	LeaderId          int    // so follower can redirect clients
+	LastIncludedIndex int    // index of the last included entry in the snapshot
+	LastIncludedTerm  int    // term of the last included entry in the snapshot
+	Snapshot          []byte // raw bytes of the snapshot
+}
+
+type InstallSnapshotReply struct {
+	Term int // currentTerm, for leader to update itself
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return // reply false if term < currentTerm
+	}
+
+	if args.LastIncludedIndex <= rf.lastIncludedIndex {
+		return // the snapshot is older than our snapshot
+	}
+
+	rf.updateTerm(args.Term)
+	rf.state = Follower
+	rf.gotPulse = true
+
+	removeUntil := args.LastIncludedIndex - rf.lastIncludedIndex
+	if removeUntil >= len(rf.log) {
+		panic("I THINK THIS SHOULD NEVER HAPPEN")
+	}
+
+	newLog := make([]LogEntry, len(rf.log)-removeUntil)
+	newLog[0] = LogEntry{Term: args.LastIncludedTerm, Command: nil} // initial empty log entry
+
+	copy(newLog[1:], rf.log[removeUntil:])
+
+	rf.log = newLog
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+	rf.snapshot = make([]byte, len(args.Snapshot))
+	rf.persist()
+	copy(rf.snapshot, args.Snapshot)
+	go rf.applySnapshot()
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs) {
+	reply := &InstallSnapshotReply{}
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	if !ok || rf.killed() {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.updateTerm(reply.Term)
+
+	// i think here we might send AppendEntries
 }
