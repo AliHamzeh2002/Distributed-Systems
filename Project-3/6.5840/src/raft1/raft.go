@@ -133,8 +133,8 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&term) != nil ||
 		d.Decode(&vote) != nil ||
 		d.Decode(&log) != nil ||
-		d.Decode(&rf.lastIncludedIndex) != nil ||
-		d.Decode(&rf.lastIncludedTerm) != nil {
+		d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&lastIncludedTerm) != nil {
 		return // error reading persist data
 	}
 
@@ -145,8 +145,8 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastIncludedTerm = lastIncludedTerm
 
 	// **reset volatile state to snapshot point**
-	rf.commitIndex = rf.lastIncludedIndex
-	rf.lastApplied = rf.lastIncludedIndex
+	rf.commitIndex = lastIncludedIndex
+	rf.lastApplied = lastIncludedIndex
 }
 
 func (rf *Raft) applySnapshot(snapshot []byte) {
