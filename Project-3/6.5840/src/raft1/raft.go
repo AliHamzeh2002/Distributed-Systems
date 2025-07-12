@@ -195,6 +195,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = term
+	rf.commitIndex = max(rf.commitIndex, index)
+	rf.lastApplied = max(rf.lastApplied, index)
 
 	rf.snapshot = snapshot
 	rf.persist()
@@ -490,6 +492,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 			}
 
 			go rf.sendInstallSnapshot(server, args)
+			return
 		}
 
 		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex-1].Term
@@ -555,6 +558,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	for i := range rf.peers {
 		if i == rf.me {
+			continue
+		}
+
+		if rf.nextIndex[i] <= rf.lastIncludedIndex {
+			args := &InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.lastIncludedIndex,
+				LastIncludedTerm:  rf.lastIncludedTerm,
+				Snapshot:          rf.snapshot,
+			}
+			go rf.sendInstallSnapshot(i, args)
 			continue
 		}
 
@@ -726,10 +741,19 @@ func (rf *Raft) sendHeartbeat() {
 			continue
 		}
 
-		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
+		if rf.nextIndex[i] <= rf.lastIncludedIndex {
+			args := &InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.lastIncludedIndex,
+				LastIncludedTerm:  rf.lastIncludedTerm,
+				Snapshot:          rf.snapshot,
+			}
+			go rf.sendInstallSnapshot(i, args)
+			continue
+		}
 
-		//If last log index ≥ nextIndex for a follower: send
-		// AppendEntries RPC with log entries starting at nextIndex
+		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
 
 		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
 		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
@@ -834,6 +858,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.lastIncludedIndex = args.LastIncludedIndex
 	rf.lastIncludedTerm = args.LastIncludedTerm
 	rf.snapshot = make([]byte, len(args.Snapshot))
+	rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
+	rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
 	rf.persist()
 	copy(rf.snapshot, args.Snapshot)
 	go rf.applySnapshot()
@@ -850,5 +876,5 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs) {
 	defer rf.mu.Unlock()
 	rf.updateTerm(reply.Term)
 
-	// i think here we might send AppendEntries
+	// TODO: i think here we might send AppendEntries
 }
