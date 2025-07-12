@@ -752,11 +752,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastIncludedTerm = 0
 
 	// Your initialization code here (3A, 3B, 3C).
+	rf.log = make([]LogEntry, 0)
+	rf.log = append(rf.log, LogEntry{Term: 0, Command: nil}) // initial empty log entry
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	rf.log = make([]LogEntry, 0)
-	rf.log = append(rf.log, LogEntry{Term: rf.lastIncludedTerm, Command: nil}) // initial empty log entry
 
 	snapshot := persister.ReadSnapshot()
 	if len(snapshot) != 0 {
