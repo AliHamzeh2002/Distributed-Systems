@@ -76,19 +76,6 @@ type Raft struct {
 	snapshot          []byte // for caching the snapshot
 }
 
-func (rf *Raft) getArrayIndex(logIndex int) int {
-	if logIndex <= rf.lastIncludedIndex {
-		panic("logIndex is less than lastIncludedIndex")
-	}
-
-	arrayIndex := logIndex - rf.lastIncludedIndex
-	if arrayIndex >= len(rf.log) {
-		panic("logIndex is greater than the length of the log")
-	}
-
-	return arrayIndex
-}
-
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -162,15 +149,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.lastApplied = rf.lastIncludedIndex
 }
 
-func (rf *Raft) readPersistSnapshot(snapshot []byte) {
-	if len(snapshot) == 0 {
-
-		return
-	}
-
-	rf.snapshot = make([]byte, len(snapshot))
-	copy(rf.snapshot, snapshot)
-
+func (rf *Raft) applySnapshot(snapshot []byte) {
 	rf.applyCh <- raftapi.ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      rf.snapshot,
@@ -203,11 +182,15 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// if index is 10 and lastIncludedIndex is 5,
 	// and len(rf.log) is 15, then we need to keep
 	// log entries 11-15
-	arrayIndex := rf.getArrayIndex(index)
+	arrayIndex := index - rf.lastIncludedIndex
 	term := rf.log[arrayIndex].Term
 
 	newLog := make([]LogEntry, len(rf.log)-(arrayIndex))
-	copy(newLog, rf.log[arrayIndex+1:])
+	newLog[0] = LogEntry{Term: term, Command: nil} // initial empty log entry
+	if arrayIndex+1 < len(rf.log) {
+		copy(newLog[1:], rf.log[arrayIndex+1:])
+	}
+
 	rf.log = newLog
 
 	rf.lastIncludedIndex = index
@@ -324,7 +307,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if !rf.isLogMatching(args.PrevLogIndex, args.PrevLogTerm) {
 		reply.Success = false
-		reply.XLen = len(rf.log)
+		reply.XLen = len(rf.log) // Amirali:TODO we should change this
 		reply.ConflictIndex, reply.ConflictTerm = rf.findConflictData(args.PrevLogIndex)
 		return
 	}
@@ -334,7 +317,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// existing entry and all that follow it (§5.3)
 	// Append any new entries not already in the log
 	startIndex := args.PrevLogIndex + 1
-	arrayIndex := rf.getArrayIndex(startIndex)
+	arrayIndex := startIndex - rf.lastIncludedIndex
 	i := 0
 	for ; i < len(args.Entries); i++ {
 		if arrayIndex+i >= len(rf.log) {
@@ -361,10 +344,10 @@ func (rf *Raft) findConflictData(prevLogIndex int) (int, int) {
 	if prevLogIndex-rf.lastIncludedIndex >= len(rf.log) {
 		return -1, -1
 	}
-	conflictTerm := rf.log[rf.getArrayIndex(prevLogIndex)].Term
+	conflictTerm := rf.log[prevLogIndex-rf.lastIncludedIndex].Term
 	for i := 0; i < len(rf.log); i++ {
 		if rf.log[i].Term == conflictTerm {
-			return i, conflictTerm
+			return i + rf.lastIncludedIndex, conflictTerm
 		}
 	}
 	return -1, -1
@@ -374,7 +357,7 @@ func (rf *Raft) isLogMatching(index int, term int) bool {
 	if index < 0 || index-rf.lastIncludedIndex >= len(rf.log) {
 		return false
 	}
-	return rf.log[rf.getArrayIndex(index)].Term == term
+	return rf.log[index-rf.lastIncludedIndex].Term == term
 }
 
 // func (rf *Raft) applyEntries(){
@@ -401,7 +384,7 @@ func (rf *Raft) applier() {
 		rf.applierCond.Wait()
 		commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
 		entries := make([]LogEntry, commitIndex-lastApplied)
-		copy(entries, rf.log[rf.getArrayIndex(lastApplied)+1:rf.getArrayIndex(commitIndex)+1])
+		copy(entries, rf.log[lastApplied-rf.lastIncludedIndex+1:commitIndex-rf.lastIncludedIndex+1])
 		startIndex := lastApplied + 1
 		rf.lastApplied = commitIndex
 		rf.mu.Unlock()
@@ -464,10 +447,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 	defer rf.mu.Unlock()
 	defer rf.persist()
 
-	if reply.Term > rf.currentTerm {
-		rf.updateTerm(reply.Term)
-		return
-	}
+	rf.updateTerm(reply.Term)
 
 	if rf.state != Leader || rf.killed() {
 		return
@@ -485,22 +465,22 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 					count++
 				}
 			}
-			if count > len(rf.peers)/2 && rf.log[rf.getArrayIndex(i)].Term == rf.currentTerm {
+			if count > len(rf.peers)/2 && rf.log[i-rf.lastIncludedIndex].Term == rf.currentTerm {
 				rf.commitIndex = i
 			}
 		}
 		rf.applierCond.Signal()
 	} else if args.Term >= reply.Term {
 		if reply.XLen <= args.PrevLogIndex {
-			rf.nextIndex[server] = reply.XLen
+			rf.nextIndex[server] = reply.XLen // Amirali:TODO we should change this
 		} else if rf.hasTerm(reply.ConflictTerm) {
 			rf.nextIndex[server] = rf.findLastEntryIndex(reply.ConflictTerm) + 1
 		} else {
 			rf.nextIndex[server] = reply.ConflictIndex
 		}
-		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[rf.nextIndex[server]-1].Term
-		sendEntries := make([]LogEntry, len(rf.log[rf.getArrayIndex(rf.nextIndex[server]):]))
-		copy(sendEntries, rf.log[rf.getArrayIndex(rf.nextIndex[server]):])
+		prevLogIndex, prevLogTerm := rf.nextIndex[server]-1, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex-1].Term
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[server]-rf.lastIncludedIndex:])
 		newArgs := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -530,7 +510,7 @@ func (rf *Raft) findLastEntryIndex(term int) int {
 		}
 	}
 
-	return lastEntryIndex
+	return lastEntryIndex + rf.lastIncludedIndex
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -556,15 +536,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.log = append(rf.log, LogEntry{Command: command, Term: term})
 
-	index := len(rf.log) - 1
+	index := len(rf.log) + rf.lastIncludedIndex - 1
 
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
-		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-1].Term
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]:]))
-		copy(sendEntries, rf.log[rf.nextIndex[i]:])
+		prevLogIndex := rf.nextIndex[i] - 1
+		prevLogTerm := rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -620,7 +601,6 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) startElection() {
-	// TODO: I think we might persist the state here
 	rf.mu.Lock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
@@ -640,13 +620,8 @@ func (rf *Raft) startElection() {
 }
 
 func (rf *Raft) getLastLogIndexAndTerm() (int, int) {
-	lastLogIndex := len(rf.log) - 1
-	if lastLogIndex < 0 {
-		panic("We should always have at least one log entry (the initial empty one)")
-	}
-
-	lastLogTerm := rf.log[lastLogIndex].Term
-
+	lastLogIndex := rf.lastIncludedIndex + len(rf.log) - 1
+	lastLogTerm := rf.log[len(rf.log)-1].Term
 	return lastLogIndex, lastLogTerm
 }
 
@@ -734,12 +709,12 @@ func (rf *Raft) sendHeartbeat() {
 			continue
 		}
 
-		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-1].Term
+		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
 
 		//If last log index ≥ nextIndex for a follower: send
 		// AppendEntries RPC with log entries starting at nextIndex
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]:]))
-		copy(sendEntries, rf.log[rf.nextIndex[i]:])
+		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
+		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
 
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -773,6 +748,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower // initial state
 	rf.gotPulse = true  // to avoid starting an election immediately
 	rf.currentTerm = InitialTerm
+	rf.lastIncludedIndex = 0
+	rf.lastIncludedTerm = 0
 
 	// Your initialization code here (3A, 3B, 3C).
 
@@ -781,7 +758,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = make([]LogEntry, 0)
 	rf.log = append(rf.log, LogEntry{Term: rf.lastIncludedTerm, Command: nil}) // initial empty log entry
 
-	go rf.readPersistSnapshot(persister.ReadSnapshot())
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) != 0 {
+		rf.snapshot = make([]byte, len(snapshot))
+		copy(rf.snapshot, snapshot)
+		go rf.applySnapshot(snapshot)
+	}
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
