@@ -804,6 +804,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	if len(snapshot) != 0 {
 		rf.snapshot = make([]byte, len(snapshot))
 		copy(rf.snapshot, snapshot)
+		rf.persist()
 		go rf.applySnapshot()
 	}
 
@@ -858,10 +859,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.lastIncludedIndex = args.LastIncludedIndex
 	rf.lastIncludedTerm = args.LastIncludedTerm
 	rf.snapshot = make([]byte, len(args.Snapshot))
+	copy(rf.snapshot, args.Snapshot)
+	rf.persist()
+
 	rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
 	rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
-	rf.persist()
-	copy(rf.snapshot, args.Snapshot)
+
 	go rf.applySnapshot()
 }
 
