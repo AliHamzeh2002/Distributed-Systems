@@ -108,19 +108,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if len(data) < 1 {
 		return
 	}
-	// Your code here (3C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
@@ -170,7 +158,6 @@ func (rf *Raft) PersistBytes() int {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (3D).
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -205,7 +192,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
-	// Your data here (3A, 3B).
 	Term         int // candidate's term
 	CandidateId  int // candidate requesting vote
 	LastLogIndex int // index of candidate's last log entry
@@ -215,7 +201,6 @@ type RequestVoteArgs struct {
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
-	// Your data here (3A).
 	Term        int  // current term, for candidate to update itself
 	VoteGranted bool // true means candidate received vote
 }
@@ -236,7 +221,6 @@ func (rf *Raft) isCandidateLogsUpToDate(lastLogIndex, lastLogTerm int) bool {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (3A, 3B).
 	if rf.killed() {
 		return
 	}
@@ -305,9 +289,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	reply.Success = true
 
-	// our snapshot is further than lastIncludedIndex 
+	// our snapshot is further than lastIncludedIndex
 	// so we send -1 so the leader send its snapshot to make us match
-	if args.PrevLogIndex - rf.lastIncludedIndex < 0{
+	if args.PrevLogIndex-rf.lastIncludedIndex < 0 {
 		reply.XLen = -1
 		return
 	}
@@ -368,24 +352,6 @@ func (rf *Raft) isLogMatching(index int, term int) bool {
 	}
 	return rf.log[index-rf.lastIncludedIndex].Term == term
 }
-
-// func (rf *Raft) applyEntries(){
-// 	rf.mu.Lock()
-// 	commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
-// 	entries := make([]LogEntry, commitIndex-lastApplied)
-// 	copy(entries, rf.log[lastApplied+1:commitIndex+1])
-// 	startIndex := lastApplied + 1
-// 	rf.lastApplied = commitIndex
-// 	rf.mu.Unlock()
-
-// 	for i, entry := range entries{
-// 		rf.applyCh <- raftapi.ApplyMsg{
-// 			CommandValid: true,
-// 			Command:      entry.Command,
-// 			CommandIndex: startIndex + i,
-// 		}
-// 	}
-// }
 
 func (rf *Raft) applier() {
 	for !rf.killed() {
@@ -451,10 +417,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs) {
 	}
 
 	rf.mu.Lock()
-	//fmt.Println("entered", server, rf.me)
-	//defer fmt.Println("returned")
 	defer rf.mu.Unlock()
-	defer rf.persist()
 
 	rf.updateTerm(reply.Term)
 
@@ -768,7 +731,6 @@ func (rf *Raft) sendHeartbeat() {
 		// copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
 		sendEntries := rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]
 
-
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
@@ -840,44 +802,44 @@ type InstallSnapshotReply struct {
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-    rf.mu.Lock()
-    defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-    reply.Term = rf.currentTerm
-    if args.Term < rf.currentTerm {
-        return
-    }
+	reply.Term = rf.currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
 
-    if args.LastIncludedIndex <= rf.commitIndex {
-        return
-    }
+	if args.LastIncludedIndex <= rf.commitIndex {
+		return
+	}
 
-    rf.updateTerm(args.Term)
-    rf.state = Follower
-    rf.gotPulse = true
+	rf.updateTerm(args.Term)
+	rf.state = Follower
+	rf.gotPulse = true
 
-    removeUntil := args.LastIncludedIndex - rf.lastIncludedIndex
-    if removeUntil >= len(rf.log) {
-        // Snapshot covers entire log or beyond; discard log and start fresh.
-        rf.log = []LogEntry{{Term: args.LastIncludedTerm, Command: nil}}
-    } else if removeUntil > 0 {
-        // Snapshot covers part of log; keep entries after LastIncludedIndex.
-        newLog := make([]LogEntry, len(rf.log)-removeUntil)
-        newLog[0] = LogEntry{Term: args.LastIncludedTerm, Command: nil}
-        copy(newLog[1:], rf.log[removeUntil+1:])
-        rf.log = newLog
-    } // else: snapshot aligns with current log start, no change needed
+	removeUntil := args.LastIncludedIndex - rf.lastIncludedIndex
+	if removeUntil >= len(rf.log) {
+		// Snapshot covers entire log or beyond; discard log and start fresh.
+		rf.log = []LogEntry{{Term: args.LastIncludedTerm, Command: nil}}
+	} else if removeUntil > 0 {
+		// Snapshot covers part of log; keep entries after LastIncludedIndex.
+		newLog := make([]LogEntry, len(rf.log)-removeUntil)
+		newLog[0] = LogEntry{Term: args.LastIncludedTerm, Command: nil}
+		copy(newLog[1:], rf.log[removeUntil+1:])
+		rf.log = newLog
+	} // else: snapshot aligns with current log start, no change needed
 
-    rf.lastIncludedIndex = args.LastIncludedIndex
-    rf.lastIncludedTerm = args.LastIncludedTerm
-    rf.snapshot = make([]byte, len(args.Snapshot))
-    copy(rf.snapshot, args.Snapshot)
-    rf.persist()
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+	rf.snapshot = make([]byte, len(args.Snapshot))
+	copy(rf.snapshot, args.Snapshot)
+	rf.persist()
 
-    rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
-    rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
+	rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
+	rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
 
-    go rf.applySnapshot()
+	go rf.applySnapshot()
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs) {
@@ -890,6 +852,5 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.updateTerm(reply.Term)
-
-	// TODO: i think here we might send AppendEntries
+	rf.nextIndex[server] = args.LastIncludedIndex + 1
 }
