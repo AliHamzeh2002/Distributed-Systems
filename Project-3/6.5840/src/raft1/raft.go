@@ -305,6 +305,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	reply.Success = true
 
+	// our snapshot is further than lastIncludedIndex 
+	// so we send -1 so the leader send its snapshot to make us match
+	if args.PrevLogIndex - rf.lastIncludedIndex < 0{
+		reply.XLen = -1
+		return
+	}
+
 	// Reply false if log doesn’t contain an entry
 	// at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if !rf.isLogMatching(args.PrevLogIndex, args.PrevLogTerm) {
@@ -829,43 +836,44 @@ type InstallSnapshotReply struct {
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
-	if args.Term < rf.currentTerm {
-		return // reply false if term < currentTerm
-	}
+    reply.Term = rf.currentTerm
+    if args.Term < rf.currentTerm {
+        return
+    }
 
-	if args.LastIncludedIndex <= rf.lastIncludedIndex {
-		return // the snapshot is older than our snapshot
-	}
+    if args.LastIncludedIndex <= rf.commitIndex {
+        return
+    }
 
-	rf.updateTerm(args.Term)
-	rf.state = Follower
-	rf.gotPulse = true
+    rf.updateTerm(args.Term)
+    rf.state = Follower
+    rf.gotPulse = true
 
-	removeUntil := args.LastIncludedIndex - rf.lastIncludedIndex
-	if removeUntil >= len(rf.log) {
-		panic("I THINK THIS SHOULD NEVER HAPPEN")
-	}
+    removeUntil := args.LastIncludedIndex - rf.lastIncludedIndex
+    if removeUntil >= len(rf.log) {
+        // Snapshot covers entire log or beyond; discard log and start fresh.
+        rf.log = []LogEntry{{Term: args.LastIncludedTerm, Command: nil}}
+    } else if removeUntil > 0 {
+        // Snapshot covers part of log; keep entries after LastIncludedIndex.
+        newLog := make([]LogEntry, len(rf.log)-removeUntil)
+        newLog[0] = LogEntry{Term: args.LastIncludedTerm, Command: nil}
+        copy(newLog[1:], rf.log[removeUntil+1:])
+        rf.log = newLog
+    } // else: snapshot aligns with current log start, no change needed
 
-	newLog := make([]LogEntry, len(rf.log)-removeUntil)
-	newLog[0] = LogEntry{Term: args.LastIncludedTerm, Command: nil} // initial empty log entry
+    rf.lastIncludedIndex = args.LastIncludedIndex
+    rf.lastIncludedTerm = args.LastIncludedTerm
+    rf.snapshot = make([]byte, len(args.Snapshot))
+    copy(rf.snapshot, args.Snapshot)
+    rf.persist()
 
-	copy(newLog[1:], rf.log[removeUntil:])
+    rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
+    rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
 
-	rf.log = newLog
-	rf.lastIncludedIndex = args.LastIncludedIndex
-	rf.lastIncludedTerm = args.LastIncludedTerm
-	rf.snapshot = make([]byte, len(args.Snapshot))
-	copy(rf.snapshot, args.Snapshot)
-	rf.persist()
-
-	rf.commitIndex = max(rf.commitIndex, args.LastIncludedIndex)
-	rf.lastApplied = max(rf.lastApplied, args.LastIncludedIndex)
-
-	go rf.applySnapshot()
+    go rf.applySnapshot()
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs) {
