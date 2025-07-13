@@ -634,7 +634,9 @@ func (rf *Raft) ticker() {
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 350 + (rand.Int63() % 300)
+		// ms := 350 + (rand.Int63() % 300)
+		ms := 150 + (rand.Int63() % 150) // → 150–300ms
+
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -762,8 +764,10 @@ func (rf *Raft) sendHeartbeat() {
 
 		prevLogIndex, prevLogTerm := rf.nextIndex[i]-1, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex-1].Term
 
-		sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
-		copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
+		// sendEntries := make([]LogEntry, len(rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]))
+		// copy(sendEntries, rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:])
+		sendEntries := rf.log[rf.nextIndex[i]-rf.lastIncludedIndex:]
+
 
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
